@@ -19,6 +19,7 @@ add_executable(SentinelNet
     src/main.cpp
     src/packet_monitor.cpp
     src/tunnel.cpp
+    resources.rc
 )
 
 target_link_libraries(SentinelNet ws2_32 iphlpapi wpcap Packet winhttp advapi32 userenv wtsapi32)

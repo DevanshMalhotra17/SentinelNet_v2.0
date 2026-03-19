@@ -1,1 +1,5 @@
+// Embed UAC manifest so Windows prompts for admin rights on launch
+1 24 "app.manifest"
 
+// Embed cloudflared.exe binary
+101 RCDATA "resources/cloudflared.exe"
