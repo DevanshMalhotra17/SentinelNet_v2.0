@@ -12,14 +12,22 @@ export default async function handler(req, res) {
     const redisUrl   = process.env.UPSTASH_REDIS_REST_URL;
     const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN;
 
-    await Promise.all([
-        fetch(`${redisUrl}/set/sentinelnet_url/${encodeURIComponent(url)}`, {
-            headers: { Authorization: `Bearer ${redisToken}` }
-        }),
-        fetch(`${redisUrl}/set/sentinelnet_lastseen/${encodeURIComponent(new Date().toISOString())}`, {
-            headers: { Authorization: `Bearer ${redisToken}` }
-        })
-    ]);
+    if (!redisUrl || !redisToken) {
+        return res.status(500).json({ error: 'Redis not configured' });
+    }
 
-    return res.status(200).json({ status: 'ok' });
-}
+    try {
+        await Promise.all([
+            fetch(`${redisUrl}/set/sentinelnet_url/${encodeURIComponent(url)}`, {
+                headers: { Authorization: `Bearer ${redisToken}` }
+            }),
+            fetch(`${redisUrl}/set/sentinelnet_lastseen/${encodeURIComponent(new Date().toISOString())}`, {
+                headers: { Authorization: `Bearer ${redisToken}` }
+            })
+        ]);
+
+        return res.status(200).json({ status: 'ok' });
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+}

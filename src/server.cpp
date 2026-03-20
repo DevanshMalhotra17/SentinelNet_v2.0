@@ -241,7 +241,8 @@ void APIServer::start() {
         (lineEnd != std::string::npos) ? request.substr(0, lineEnd) : "INVALID";
     std::cout << "[REQUEST] " << requestLine << std::endl;
 
-    if (request.find("GET /hack.js") != std::string::npos) {
+    if (request.find("GET /hack.js") != std::string::npos ||
+        request.find("GET /web/hack.js") != std::string::npos) {
       std::string js = readFile("hack.js");
       if (js.empty())
         js = readFile("web/hack.js");
@@ -254,7 +255,8 @@ void APIServer::start() {
             "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\n\r\n" +
             js;
       }
-    } else if (request.find("GET /hack") != std::string::npos) {
+    } else if (request.find("GET /hack") != std::string::npos ||
+               request.find("GET /web/hack") != std::string::npos) {
       std::string html = readFile("hack.html");
       if (html.empty())
         html = readFile("web/hack.html");
@@ -265,7 +267,8 @@ void APIServer::start() {
       } else {
         response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n" + html;
       }
-    } else if (request.find("GET /connect.html") != std::string::npos) {
+    } else if (request.find("GET /connect.html") != std::string::npos ||
+               request.find("GET /web/connect.html") != std::string::npos) {
       std::string html = readFile("connect.html");
       if (html.empty())
         html = readFile("web/connect.html");
@@ -279,6 +282,7 @@ void APIServer::start() {
       }
     } else if (request.find("GET / ") != std::string::npos ||
                request.find("GET /dashboard.html") != std::string::npos ||
+               request.find("GET /web/dashboard.html") != std::string::npos ||
                request.find("GET /index.html") != std::string::npos) {
       std::string html = readFile("dashboard.html");
       if (html.empty())
@@ -302,7 +306,8 @@ void APIServer::start() {
                    "Connection: close\r\n\r\n" +
                    html;
       }
-    } else if (request.find("GET /style.css") != std::string::npos) {
+    } else if (request.find("GET /style.css") != std::string::npos ||
+               request.find("GET /web/style.css") != std::string::npos) {
       std::string css = readFile("style.css");
       if (css.empty())
         css = readFile("web/style.css");
@@ -320,7 +325,8 @@ void APIServer::start() {
                    "Connection: close\r\n\r\n" +
                    css;
       }
-    } else if (request.find("GET /script.js") != std::string::npos) {
+    } else if (request.find("GET /script.js") != std::string::npos ||
+               request.find("GET /web/script.js") != std::string::npos) {
       std::string js = readFile("script.js");
       if (js.empty())
         js = readFile("web/script.js");
@@ -338,7 +344,8 @@ void APIServer::start() {
                    "Connection: close\r\n\r\n" +
                    js;
       }
-    } else if (request.find("GET /hack1.js") != std::string::npos) {
+    } else if (request.find("GET /hack1.js") != std::string::npos ||
+               request.find("GET /web/hack1.js") != std::string::npos) {
       std::string js = readFile("hack1.js");
       if (js.empty())
         js = readFile("../web/hack1.js");

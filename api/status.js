@@ -8,20 +8,28 @@ export default async function handler(req, res) {
     const redisUrl   = process.env.UPSTASH_REDIS_REST_URL;
     const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN;
 
-    const [urlResp, timeResp] = await Promise.all([
-        fetch(`${redisUrl}/get/sentinelnet_url`, {
-            headers: { Authorization: `Bearer ${redisToken}` }
-        }),
-        fetch(`${redisUrl}/get/sentinelnet_lastseen`, {
-            headers: { Authorization: `Bearer ${redisToken}` }
-        })
-    ]);
+    if (!redisUrl || !redisToken) {
+        return res.status(200).json({ url: 'offline', lastSeen: null, error: 'Redis not configured' });
+    }
 
-    const urlData  = await urlResp.json();
-    const timeData = await timeResp.json();
+    try {
+        const [urlResp, timeResp] = await Promise.all([
+            fetch(`${redisUrl}/get/sentinelnet_url`, {
+                headers: { Authorization: `Bearer ${redisToken}` }
+            }),
+            fetch(`${redisUrl}/get/sentinelnet_lastseen`, {
+                headers: { Authorization: `Bearer ${redisToken}` }
+            })
+        ]);
 
-    const url      = urlData.result  || 'offline';
-    const lastSeen = timeData.result || null;
+        const urlData  = await urlResp.json();
+        const timeData = await timeResp.json();
 
-    return res.status(200).json({ url, lastSeen });
-}
+        const url      = urlData.result  || 'offline';
+        const lastSeen = timeData.result || null;
+
+        return res.status(200).json({ url, lastSeen });
+    } catch (e) {
+        return res.status(200).json({ url: 'offline', lastSeen: null, error: e.message });
+    }
+}
