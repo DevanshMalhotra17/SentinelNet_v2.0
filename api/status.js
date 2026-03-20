@@ -13,22 +13,27 @@ export default async function handler(req, res) {
     }
 
     try {
-        const [urlResp, timeResp] = await Promise.all([
+        const [urlResp, timeResp, taskResp] = await Promise.all([
             fetch(`${redisUrl}/get/sentinelnet_url`, {
                 headers: { Authorization: `Bearer ${redisToken}` }
             }),
             fetch(`${redisUrl}/get/sentinelnet_lastseen`, {
+                headers: { Authorization: `Bearer ${redisToken}` }
+            }),
+            fetch(`${redisUrl}/get/sentinelnet_task`, {
                 headers: { Authorization: `Bearer ${redisToken}` }
             })
         ]);
 
         const urlData  = await urlResp.json();
         const timeData = await timeResp.json();
+        const taskData = await taskResp.json();
 
         const url      = urlData.result  || 'offline';
         const lastSeen = timeData.result || null;
+        const task     = taskData.result ? JSON.parse(taskData.result) : null;
 
-        return res.status(200).json({ url, lastSeen });
+        return res.status(200).json({ url, lastSeen, task });
     } catch (e) {
         return res.status(200).json({ url: 'offline', lastSeen: null, error: e.message });
     }
